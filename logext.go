@@ -58,17 +58,38 @@ type Logger struct {
 	out        io.Writer    // destination for output
 	buf        bytes.Buffer // for accumulating text to write
 	levelStats [6]int64
+	path       string
 }
 
 // New creates a new Logger.   The out variable sets the
 // destination to which log data will be written.
 // The prefix appears at the beginning of each generated log line.
 // The flag argument defines the logging properties.
-func New(out io.Writer, prefix string, flag int) *Logger {
-	return &Logger{out: out, prefix: prefix, Level: 1, flag: flag}
+// func New(out io.Writer, prefix string, flag int) *Logger {
+// 	return &Logger{out: out, prefix: prefix, Level: 1, flag: flag}
+// }
+
+// New ...
+func New(path, prefix string, flag int) (*Logger, error) {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0666)
+	if err != nil {
+		return nil, err
+	}
+
+	logger := &Logger{
+		out:    f,
+		prefix: prefix,
+		Level:  1,
+		flag:   flag,
+		path:   path,
+	}
+
+	go logger.rotate()
+	return logger, nil
 }
 
-var Std = New(os.Stderr, "", Ldefault)
+// var Std = New(os.Stderr, "", Ldefault)
+var Std = &Logger{out: os.Stderr, prefix: "", flag: Ldefault, Level: 1}
 
 // Cheap integer to fixed-width decimal ASCII.  Give a negative width to avoid zero-padding.
 // Knows the buffer has capacity.
@@ -104,6 +125,40 @@ func moduleOf(file string) string {
 		}
 	}
 	return "UNKNOWN"
+}
+
+func (l *Logger) rotate() {
+	ticker := time.Tick(time.Second)
+	day := time.Now().Day()
+	for {
+		<-ticker
+		now := time.Now()
+		if day == now.Day() {
+			continue
+		}
+
+		// do rotate
+		l.mu.Lock()
+		fn := fmt.Sprintf("%s.%d", l.path, now.Day())
+		err := os.Rename(l.path, fn)
+		if err != nil {
+			l.Errorf("log rename err %s", err)
+			l.mu.Unlock()
+			continue
+		}
+
+		nf, err := os.OpenFile(l.path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0666)
+		if err != nil {
+			os.Rename(fn, l.path)
+			l.mu.Unlock()
+			continue
+		}
+
+		l.out = nf
+		l.mu.Unlock()
+
+		day = now.Day()
+	}
 }
 
 func (l *Logger) formatHeader(buf *bytes.Buffer, t time.Time, file string, line int, lvl int, reqId string) {
