@@ -427,6 +427,11 @@ func SetOutput(w io.Writer) {
 	Std.out = w
 }
 
+// Rotate enable or disable do rotate for the standard logger.
+func Rotate() {
+	go Std.rotate()
+}
+
 // Flags returns the output flags for the standard logger.
 func Flags() int {
 	return Std.Flags()
