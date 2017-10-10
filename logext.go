@@ -59,6 +59,8 @@ type Logger struct {
 	buf        bytes.Buffer // for accumulating text to write
 	levelStats [6]int64
 	path       string
+	rotate     bool // only support date rotate like name.log-dd-mm-yy
+	today      int  // key the current day
 }
 
 // New creates a new Logger.   The out variable sets the
@@ -82,14 +84,14 @@ func New(path, prefix string, flag int) (*Logger, error) {
 		Level:  1,
 		flag:   flag,
 		path:   path,
+		today:  time.Now().Day(),
 	}
 
-	go logger.rotate()
 	return logger, nil
 }
 
 // var Std = New(os.Stderr, "", Ldefault)
-var Std = &Logger{out: os.Stderr, prefix: "", flag: Ldefault, Level: 1}
+var Std = &Logger{out: os.Stderr, flag: Ldefault, Level: 1}
 
 // Cheap integer to fixed-width decimal ASCII.  Give a negative width to avoid zero-padding.
 // Knows the buffer has capacity.
@@ -125,40 +127,6 @@ func moduleOf(file string) string {
 		}
 	}
 	return "UNKNOWN"
-}
-
-func (l *Logger) rotate() {
-	ticker := time.Tick(time.Second)
-	day := time.Now().Day()
-	for {
-		<-ticker
-		now := time.Now()
-		if day == now.Day() {
-			continue
-		}
-
-		// do rotate
-		l.mu.Lock()
-		fn := fmt.Sprintf("%s.%d", l.path, now.Day())
-		err := os.Rename(l.path, fn)
-		if err != nil {
-			l.Errorf("log rename err %s", err)
-			l.mu.Unlock()
-			continue
-		}
-
-		nf, err := os.OpenFile(l.path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0666)
-		if err != nil {
-			os.Rename(fn, l.path)
-			l.mu.Unlock()
-			continue
-		}
-
-		l.out = nf
-		l.mu.Unlock()
-
-		day = now.Day()
-	}
 }
 
 func (l *Logger) formatHeader(buf *bytes.Buffer, t time.Time, file string, line int, lvl int, reqId string) {
@@ -254,8 +222,32 @@ func (l *Logger) Output(reqId string, lvl int, calldepth int, s string) error {
 	if len(s) > 0 && s[len(s)-1] != '\n' {
 		l.buf.WriteByte('\n')
 	}
+	if l.rotate {
+		l.doRotate(now)
+	}
 	_, err := l.out.Write(l.buf.Bytes())
 	return err
+}
+
+func (l *Logger) doRotate(t time.Time) error {
+	d := t.Day()
+	if d == l.today {
+		return nil
+	}
+	fn := fmt.Sprintf("%s.%s", l.path, t.Add(-24*time.Hour).Format("20060102"))
+	err := os.Rename(l.path, fn)
+	if err != nil {
+		return err
+	}
+	nf, err := os.OpenFile(l.path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0666)
+	if err != nil {
+		// rename back
+		os.Rename(fn, l.path)
+		return err
+	}
+	l.out = nf
+	l.today = d
+	return nil
 }
 
 // -----------------------------------------
@@ -420,16 +412,18 @@ func (l *Logger) SetOutputLevel(lvl int) {
 	l.Level = lvl
 }
 
+// EnableRotate enable rotate log for the logger.
+func (l *Logger) EnableRotate() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.rotate = true
+}
+
 // SetOutput sets the output destination for the standard logger.
 func SetOutput(w io.Writer) {
 	Std.mu.Lock()
 	defer Std.mu.Unlock()
 	Std.out = w
-}
-
-// Rotate enable or disable do rotate for the standard logger.
-func Rotate() {
-	go Std.rotate()
 }
 
 // Flags returns the output flags for the standard logger.

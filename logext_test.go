@@ -2,6 +2,7 @@ package log
 
 import (
 	"testing"
+	"time"
 )
 
 func TestLog(t *testing.T) {
@@ -33,4 +34,24 @@ func TestLog(t *testing.T) {
 
 	Errorf("Error: foo\n")
 	Error("Error: foo")
+}
+
+func TestRotateLog(t *testing.T) {
+	logger, err := New("/tmp/test.log", "", Ldefault)
+	if err != nil {
+		t.FailNow()
+	}
+
+	logger.SetOutputLevel(Ldebug)
+	logger.EnableRotate()
+	Std = logger
+
+	ticker := time.Tick(5 * time.Second)
+
+	for {
+
+		<-ticker
+		Debugf("this is test log %s", "ray")
+	}
+
 }
